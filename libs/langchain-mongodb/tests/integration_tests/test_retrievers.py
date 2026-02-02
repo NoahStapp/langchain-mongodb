@@ -18,7 +18,12 @@ from langchain_mongodb.retrievers import (
     MongoDBAtlasHybridSearchRetriever,
 )
 
-from ..utils import DB_NAME, PatchedMongoDBAtlasVectorSearch
+from ..utils import (
+    DB_NAME,
+    ConsistentFakeEmbeddings,
+    MockCollection,
+    PatchedMongoDBAtlasVectorSearch,
+)
 
 COLLECTION_NAME = "langchain_test_retrievers"
 COLLECTION_NAME_NESTED = "langchain_test_retrievers_nested"
@@ -28,6 +33,7 @@ PAGE_CONTENT_FIELD = "text"
 PAGE_CONTENT_FIELD_NESTED = "title.text"
 SEARCH_INDEX_NAME = "text_index"
 SEARCH_INDEX_NAME_NESTED = "text_index_nested"
+INDEX_NAME = "langchain-test-index"
 
 TIMEOUT = 60.0
 INTERVAL = 0.5
@@ -41,6 +47,20 @@ def example_documents() -> List[Document]:
         Document(page_content="In 2021, I visited New Orleans"),
         Document(page_content="Sandwiches are beautiful. Sandwiches are fine."),
     ]
+
+
+@pytest.fixture(scope="module")
+def embedding_openai() -> Embeddings:
+    return ConsistentFakeEmbeddings()
+
+
+def get_collection() -> MockCollection:
+    return MockCollection()
+
+
+@pytest.fixture()
+def mocked_collection() -> MockCollection:
+    return get_collection()
 
 
 @pytest.fixture(scope="module")
@@ -315,3 +335,39 @@ def test_fulltext_retriever(
     results = retriever.invoke(query)
     assert "New Orleans" in results[0].page_content
     assert "score" in results[0].metadata
+
+
+def test_fulltext_retriever_auto_create_index(
+    embedding_openai: Embeddings, mocked_collection: MockCollection
+) -> None:
+    # Explicit auto_create_index
+    assert len(mocked_collection._search_indexes) == 0
+    _ = MongoDBAtlasFullTextSearchRetriever(
+        embedding=embedding_openai,
+        collection=mocked_collection,
+        search_index_name=INDEX_NAME,
+        search_field=PAGE_CONTENT_FIELD,
+        auto_create_index=True,
+    )
+    assert len(mocked_collection._search_indexes) == 1
+
+    # Explicit dimensions
+    mocked_collection._search_indexes = []
+    _ = MongoDBAtlasFullTextSearchRetriever(
+        embedding=embedding_openai,
+        collection=mocked_collection,
+        search_index_name=INDEX_NAME,
+        search_field=PAGE_CONTENT_FIELD,
+        dimensions=10,
+    )
+
+    assert len(mocked_collection._search_indexes) == 1
+
+    # Does not auto-create
+    mocked_collection._search_indexes = []
+    _ = MongoDBAtlasFullTextSearchRetriever(
+        collection=mocked_collection,
+        search_index_name=INDEX_NAME,
+        search_field=PAGE_CONTENT_FIELD,
+    )
+    assert len(mocked_collection._search_indexes) == 0
